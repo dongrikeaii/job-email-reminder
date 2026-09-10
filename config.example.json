@@ -1,0 +1,23 @@
+{
+  "_说明": "复制本文件为 config.json 后填写。email 为完整邮箱地址，auth_code 为 IMAP/SMTP 授权码（不是登录密码）。",
+  "email": "your_name@163.com",
+  "auth_code": "在这里粘贴16位授权码",
+  "imap_host": "imap.163.com",
+  "imap_port": 993,
+  "mailbox": "INBOX",
+  "days": 7,
+  "max_results": 60,
+  "body_max_len": 3000,
+  "reminder_list": "求职待办",
+  "calendar_name": "求职日程",
+  "alarm_minutes_before": 60,
+  "_常用IMAP服务器": {
+    "163邮箱": "imap.163.com:993",
+    "126邮箱": "imap.126.com:993",
+    "yeah.net": "imap.yeah.net:993",
+    "QQ邮箱": "imap.qq.com:993",
+    "Gmail": "imap.gmail.com:993",
+    "Outlook": "outlook.office365.com:993",
+    "新浪邮箱": "imap.sina.com:993"
+  }
+}

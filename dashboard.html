@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>秋招邮件雷达</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --line:#272c36;
+  --text:#e6e8ec; --dim:#8b93a3; --accent:#4a9eff;
+  --critical:#ff5c5c; --soon:#ffa940; --normal:#4ecb8f; --overdue:#6b7280;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f5f6f8; --panel:#ffffff; --panel2:#f0f2f5; --line:#e2e5ea;
+    --text:#1a1d23; --dim:#6b7280; --accent:#2563eb;
+    --critical:#dc2626; --soon:#d97706; --normal:#059669; --overdue:#9ca3af;
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text); min-height:100vh;
+  font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  padding:28px 20px 60px;
+}
+.wrap{max-width:860px;margin:0 auto}
+
+header{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+h1{font-size:22px;font-weight:650;letter-spacing:.3px}
+.sub{color:var(--dim);font-size:13px}
+
+.banner{
+  background:linear-gradient(135deg,rgba(255,92,92,.14),rgba(255,169,64,.08));
+  border:1px solid rgba(255,92,92,.32); border-radius:12px;
+  padding:14px 18px; margin-bottom:18px; display:none;
+}
+.banner.show{display:block}
+.banner .lbl{font-size:12px;color:var(--dim);letter-spacing:1px}
+.banner .main{font-size:17px;font-weight:600;margin-top:3px}
+.banner .cd{font-size:15px;color:var(--critical);font-weight:600;margin-top:2px}
+
+.bar{
+  display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;margin-bottom:16px;
+}
+select,button{
+  font:inherit;font-size:14px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--text);padding:8px 14px;cursor:pointer;
+  transition:.15s;
+}
+button:hover{border-color:var(--accent)}
+button:active{transform:translateY(1px)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.primary:hover{filter:brightness(1.1)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.spacer{flex:1}
+.status{font-size:13px;color:var(--dim)}
+.status.err{color:var(--critical)}
+.status.ok{color:var(--normal)}
+
+.group-title{font-size:13px;color:var(--dim);margin:20px 0 10px;letter-spacing:.5px}
+
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start;
+}
+.card.done{opacity:.45}
+.card.done .title{text-decoration:line-through}
+.chk{width:18px;height:18px;margin-top:3px;accent-color:var(--accent);cursor:pointer;flex-shrink:0}
+.body{flex:1;min-width:0}
+.row1{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.title{font-weight:600;font-size:16px}
+.tag{
+  font-size:11px;padding:2px 8px;border-radius:20px;background:var(--panel2);
+  color:var(--dim);border:1px solid var(--line);
+}
+.tag.ai{border-color:rgba(74,158,255,.4);color:var(--accent)}
+.meta{font-size:13px;color:var(--dim);margin-top:4px}
+.cd{font-size:15px;font-weight:650;margin-top:6px;font-variant-numeric:tabular-nums}
+.cd.critical{color:var(--critical)} .cd.soon{color:var(--soon)}
+.cd.normal{color:var(--normal)} .cd.overdue{color:var(--overdue)}
+.notes{font-size:13px;color:var(--dim);margin-top:6px;white-space:pre-wrap}
+.acts{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.acts button,.acts a{
+  font-size:12px;padding:5px 10px;text-decoration:none;text-align:center;
+  display:inline-block;color:var(--text);border:1px solid var(--line);
+  border-radius:7px;background:var(--panel2);cursor:pointer;white-space:nowrap;
+}
+.acts a:hover,.acts button:hover{border-color:var(--accent)}
+.empty{color:var(--dim);text-align:center;padding:40px 0;font-size:14px}
+
+.cfg{
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:16px 18px;margin-bottom:16px;display:none;
+}
+.cfg.show{display:block}
+.cfg-title{font-weight:600;margin-bottom:12px}
+.cfg-row{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+.cfg-row label{width:90px;flex-shrink:0;font-size:14px;color:var(--dim)}
+.cfg-row input{
+  flex:1;font:inherit;font-size:14px;padding:8px 12px;border-radius:8px;
+  border:1px solid var(--line);background:var(--panel2);color:var(--text);
+}
+.cfg-row input:focus{outline:none;border-color:var(--accent)}
+.cfg-tip{font-size:12px;color:var(--dim);line-height:1.7;margin:10px 0 14px}
+.cfg-tip code{background:var(--panel2);padding:1px 5px;border-radius:4px}
+.cfg-acts{display:flex;gap:10px}
+.need-cfg{
+  background:rgba(255,169,64,.1);border:1px solid rgba(255,169,64,.35);
+  border-radius:12px;padding:14px 18px;margin-bottom:16px;font-size:14px;
+}
+.foot{margin-top:26px;font-size:12px;color:var(--dim);text-align:center;line-height:1.8}
+kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:11px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>秋招邮件雷达</h1>
+    <div class="sub" id="statusText">加载中…</div>
+    <div class="sub" id="updateText" style="margin-top:4px;opacity:.75"></div>
+  </header>
+
+  <div class="banner" id="banner">
+    <div class="lbl">最紧急</div>
+    <div class="main" id="bannerTitle"></div>
+    <div class="cd" id="bannerCd"></div>
+  </div>
+
+  <div class="bar">
+    <select id="days">
+      <option value="7">最近 7 天</option>
+      <option value="14">最近 14 天</option>
+      <option value="30" selected>最近 30 天</option>
+      <option value="60">最近 60 天</option>
+    </select>
+    <button class="primary" id="btnAuto">一键检索并导入</button>
+    <button id="btnScan">仅检索</button>
+    <button id="btnImport" disabled>导入选中项</button>
+    <div class="spacer"></div>
+    <button id="btnCfg">邮箱设置</button>
+    <div class="status" id="msg"></div>
+  </div>
+
+  <!-- 邮箱配置面板：首次使用或未配置时展开 -->
+  <div class="cfg" id="cfgPanel">
+    <div class="cfg-title">邮箱配置</div>
+    <div class="cfg-row">
+      <label>邮箱地址</label>
+      <input id="cfgEmail" placeholder="your_name@163.com" autocomplete="off">
+    </div>
+    <div class="cfg-row">
+      <label>授权码</label>
+      <input id="cfgCode" type="password" placeholder="16 位授权码，不是登录密码" autocomplete="new-password">
+    </div>
+    <div class="cfg-row">
+      <label>IMAP 服务器</label>
+      <input id="cfgHost" placeholder="imap.163.com">
+    </div>
+    <div class="cfg-tip" id="cfgTip">
+      163/126：网页邮箱 → 设置 → POP3/SMTP/IMAP → 开启 IMAP → 短信验证取得 16 位授权码。<br>
+      QQ 邮箱填 <code>imap.qq.com</code>，Gmail 填 <code>imap.gmail.com</code>（需用应用专用密码）。
+    </div>
+    <div class="cfg-acts">
+      <button class="primary" id="btnCfgSave">保存并测试连接</button>
+      <button id="btnCfgCancel">收起</button>
+    </div>
+  </div>
+
+  <div id="list"><div class="empty">加载中…</div></div>
+
+  <div class="foot">
+    <span id="footInfo"></span><br>
+    停止服务：在启动它的终端窗口按 <kbd>Ctrl</kbd>+<kbd>C</kbd>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let EVENTS = [], SELECTED = new Set();
+
+function fmt(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** 倒计时：精度到小时，不足 1 小时显示分钟 */
+function countdown(iso){
+  if(!iso) return {text:'', cls:'overdue', hours:null};
+  const diff = new Date(iso) - Date.now();
+  const neg = diff < 0;
+  const abs = Math.abs(diff);
+  const h = Math.floor(abs / 3600000);
+  if(neg){
+    return {text: h>=24 ? `已逾期 ${Math.floor(h/24)} 天` : `已逾期 ${h} 小时`, cls:'overdue', hours:-h};
+  }
+  if(h < 1){
+    return {text:`剩 ${Math.max(1, Math.floor(abs/60000))} 分钟`, cls:'critical', hours:0};
+  }
+  const d = Math.floor(h/24), r = h%24;
+  return {
+    text: d>0 ? `剩 ${d} 天 ${r} 小时` : `剩 ${r} 小时`,
+    cls: h > 120*24 ? 'overdue' : (h<24 ? 'critical' : (h<72 ? 'soon' : 'normal')),
+    hours: h
+  };
+}
+
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+async function api(path, body){
+  const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {};
+  const r = await fetch(path, opt);
+  return await r.json();
+}
+
+function setMsg(text, cls){
+  const el = $('msg');
+  el.textContent = text || '';
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+
+function render(){
+  const list = $('list');
+  if(!EVENTS.length){
+    list.innerHTML = '<div class="empty">暂无条目。点「一键检索并导入」开始。</div>';
+    $('banner').classList.remove('show');
+    return;
+  }
+
+  const active = EVENTS.filter(e => !e.completed && e.deadline_iso);
+  const overdue = active.filter(e => e.countdown_hours < 0)
+    .sort((a,b) => b.deadline_iso.localeCompare(a.deadline_iso)); // 最近逾期的在前
+  const pending = EVENTS.filter(e => !e.deadline_iso);
+  // dubious：截止日超过 120 天，多半是正则解析错年份，单独归组
+  const live = active.filter(e => e.countdown_hours >= 0 && e.urgency !== 'dubious');
+  const dubious = active.filter(e => e.countdown_hours >= 0 && e.urgency === 'dubious');
+  const done = EVENTS.filter(e => e.completed);
+
+  // 顶部横幅：未完成的、未逾期的最紧急项
+  const urgent = live.slice().sort((a,b) => a.countdown_hours - b.countdown_hours)[0];
+  if(urgent){
+    const c = countdown(urgent.deadline_iso);
+    $('bannerTitle').textContent = urgent.title || `${urgent.company||''} ${urgent.event_type||''}`;
+    $('bannerCd').textContent = `${c.text}　·　截止 ${fmt(urgent.deadline_iso)}`;
+    $('banner').classList.add('show');
+  } else {
+    $('banner').classList.remove('show');
+  }
+
+  const card = e => {
+    const c = countdown(e.deadline_iso);
+    const t = e.title || `${e.company||''} ${e.event_type||''}`;
+    const sel = SELECTED.has(e.id) && !e.completed;
+    return `<div class="card ${e.completed?'done':''}" data-id="${e.id}">
+      <input type="checkbox" class="chk" ${sel?'checked':''} ${e.completed?'disabled':''} data-id="${e.id}">
+      <div class="body">
+        <div class="row1">
+          <span class="title">${esc(t)}</span>
+          <span class="tag ${e.source==='ai'?'ai':''}">${e.source==='ai'?'AI 精判':'规则解析'}</span>
+          ${e.company?`<span class="tag">${esc(e.company)}</span>`:''}
+          ${e.urgency==='dubious'?'<span class="tag">⚠ 时间存疑</span>':''}
+        </div>
+        <div class="meta">${e.deadline_iso ? '截止 ' + fmt(e.deadline_iso) : '未识别到截止时间'}</div>
+        ${e.deadline_iso ? `<div class="cd ${c.cls}" data-iso="${e.deadline_iso}">${c.text}</div>` : ''}
+        ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
+      </div>
+      <div class="acts">
+        ${e.link ? `<a href="${esc(e.link)}" target="_blank" rel="noopener">打开链接</a>` : ''}
+        <button data-act="${e.completed?'undo':'done'}" data-id="${e.id}">${e.completed?'撤销完成':'标记完成'}</button>
+      </div>
+    </div>`;
+  };
+
+  let html = '';
+  const sec = (title, arr) => arr.length
+    ? `<div class="group-title">${title} · ${arr.length}</div>` + arr.map(card).join('')
+    : '';
+  html += sec('进行中', live);
+  html += sec('已逾期', overdue);
+  html += sec('待确认（无截止时间）', pending);
+  html += sec('时间存疑（超 120 天）', dubious);
+  html += sec('已完成', done);
+  list.innerHTML = html;
+
+  list.querySelectorAll('.chk').forEach(el => {
+    el.onchange = () => {
+      el.checked ? SELECTED.add(el.dataset.id) : SELECTED.delete(el.dataset.id);
+      syncImportBtn();
+    };
+  });
+  list.querySelectorAll('button[data-act]').forEach(el => {
+    el.onclick = () => toggleDone(el.dataset.id, el.dataset.act === 'undo');
+  });
+  syncImportBtn();
+}
+
+function syncImportBtn(){
+  const n = [...SELECTED].filter(id => {
+    const e = EVENTS.find(x => x.id === id);
+    return e && !e.completed;
+  }).length;
+  $('btnImport').disabled = n === 0;
+  $('btnImport').textContent = n ? `导入选中项（${n}）` : '导入选中项';
+}
+
+/** 只更新倒计时文字，不重排 DOM */
+function tick(){
+  document.querySelectorAll('.cd[data-iso]').forEach(el => {
+    const c = countdown(el.dataset.iso);
+    el.textContent = c.text;
+    el.className = 'cd ' + c.cls;
+  });
+  const b = $('bannerCd');
+  if(b && b.dataset.iso){
+    const c = countdown(b.dataset.iso);
+    b.textContent = `${c.text}　·　截止 ${fmt(b.dataset.iso)}`;
+  }
+}
+
+async function refresh(){
+  const d = await api('/api/events');
+  EVENTS = d.events || [];
+  render();
+}
+
+async function scan(thenImport){
+  const btn = thenImport ? $('btnAuto') : $('btnScan');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = '检索中…';
+  setMsg('正在连接邮箱…');
+  try{
+    const r = await api('/api/scan', {days: parseInt($('days').value, 10)});
+    if(r.ok){
+      EVENTS = r.events || [];
+      render();
+      api('/api/status').then(renderUpdate).catch(()=>{});
+      if(thenImport){
+        // 只导入未逾期且时间可信的条目，逾期的和「时间存疑」的不进系统
+        const ids = EVENTS.filter(e => !e.completed && e.countdown_hours >= 0
+                                       && e.urgency !== 'dubious').map(e => e.id);
+        if(ids.length){
+          setMsg(`检索到 ${ids.length} 项，正在导入…`);
+          const r2 = await api('/api/import', {ids});
+          if(r2.ok){
+            EVENTS = r2.events || EVENTS;
+            render();
+            setMsg(`已导入 ${ids.length} 项${r.urgent ? ' · 最紧急：' + r.urgent : ''}`, 'ok');
+          } else {
+            setMsg('导入失败：' + r2.message, 'err');
+          }
+        } else {
+          setMsg('检索完成，但没有可导入的有效条目', 'err');
+        }
+      } else {
+        setMsg(r.message + (r.urgent ? ' · 最紧急：' + r.urgent : ''), 'ok');
+      }
+    } else {
+      setMsg('检索失败：' + r.message, 'err');
+    }
+  } catch(err){
+    setMsg('请求失败：' + err.message, 'err');
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+async function importSelected(){
+  const ids = [...SELECTED];
+  if(!ids.length) return;
+  const btn = $('btnImport');
+  btn.disabled = true;
+  setMsg('正在导入…');
+  const r = await api('/api/import', {ids});
+  if(r.ok){
+    EVENTS = r.events || EVENTS;
+    SELECTED.clear(); render();
+    setMsg('导入完成', 'ok');
+  } else {
+    setMsg('导入失败：' + r.message, 'err');
+  }
+  btn.disabled = false;
+}
+
+async function saveConfig(){
+  const btn = $('btnCfgSave');
+  btn.disabled = true; btn.textContent = '测试中…';
+  setMsg('正在连接邮箱…');
+  const r = await api('/api/config-save', {
+    email: $('cfgEmail').value.trim(),
+    auth_code: $('cfgCode').value.trim(),
+    imap_host: $('cfgHost').value.trim() || 'imap.163.com',
+  });
+  setMsg(r.message, r.ok ? 'ok' : 'err');
+  btn.disabled = false; btn.textContent = '保存并测试连接';
+  if(r.ok){
+    $('cfgPanel').classList.remove('show');
+    $('cfgCode').value = '';
+    const nc = document.querySelector('.need-cfg');
+    if(nc) nc.remove();
+    await init();
+  }
+}
+
+async function toggleDone(id, undo){
+  const r = await api('/api/done', {id, undo});
+  if(r.events) EVENTS = r.events;
+  render();
+  if(r.sync) setMsg(r.sync, 'ok');
+}
+
+function renderUpdate(st){
+  window.LAST_TS = st.last_update || null;
+  if(!st.last_update){ $('updateText').textContent = '尚未扫描过 —— 点「一键检索并导入」开始'; return; }
+  $('updateText').textContent =
+    `数据更新于 ${st.last_update}（${st.last_update_text}）　来源：${st.last_update_src || '自动'}`;
+}
+
+// 每分钟检查一次数据文件是否被后台定时任务刷新，是则自动重载列表
+async function watchUpdate(){
+  try{
+    const st = await api('/api/status');
+    if(st.last_update && window.LAST_TS && st.last_update !== window.LAST_TS){
+      await refresh();
+      setMsg('检测到新数据，已自动刷新', 'ok');
+    }
+    renderUpdate(st);
+  }catch(e){ /* 忽略网络抖动 */ }
+}
+
+async function init(){
+  const st = await api('/api/status');
+  const map = {apple:'macOS 提醒事项', outlook:'Outlook 任务', ics:'.ics 文件'};
+  $('statusText').textContent = st.configured
+    ? `${st.email} · 写入到 ${map[st.backend] || st.backend}`
+    : '尚未配置邮箱';
+  $('footInfo').textContent = `后端：${st.backend}（${st.reason || ''}）　数据仅存本机，邮件只读`;
+  renderUpdate(st);
+
+  // 未配置时展开配置面板并给出引导
+  const nc = document.querySelector('.need-cfg');
+  if(!st.configured){
+    $('cfgPanel').classList.add('show');
+    if(!nc){
+      const div = document.createElement('div');
+      div.className = 'need-cfg';
+      div.innerHTML = '还没配置邮箱。填好下面的授权码后点「保存并测试连接」，'
+        + '然后就能用「一键检索并导入」了。';
+      $('list').before(div);
+    }
+    setMsg('请先配置邮箱');
+  } else if(nc){
+    nc.remove();
+  }
+  await refresh();
+}
+
+$('btnAuto').onclick = () => scan(true);
+$('btnScan').onclick = () => scan(false);
+$('btnImport').onclick = importSelected;
+$('btnCfg').onclick = () => $('cfgPanel').classList.toggle('show');
+$('btnCfgCancel').onclick = () => $('cfgPanel').classList.remove('show');
+$('btnCfgSave').onclick = saveConfig;
+
+init();
+setInterval(tick, 30000);      // 每 30 秒刷新倒计时
+setInterval(watchUpdate, 60000); // 每分钟检查后台是否扫到新数据
+setInterval(refresh, 300000);  // 每 5 分钟重新拉取
+</script>
+</body>
+</html>

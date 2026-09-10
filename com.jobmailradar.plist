@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jobmailradar</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__JOB_MAIL_RADAR_DIR__/run.sh</string>
+        <!-- --scan-only：后台进程拿不到 AppleScript 授权，只更新数据不写入。
+             打开看板点「一键检索并导入」才会写进提醒事项。 -->
+        <string>--scan-only</string>
+        <string>--days</string>
+        <string>3</string>
+    </array>
+
+    <!-- 每天 09:00 和 21:00 各扫一次 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>9</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>21</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+
+        <!-- 模板：实际使用请用 ./install-schedule.sh 生成，它会自动填入真实路径 -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__JOB_MAIL_RADAR_DIR__/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__JOB_MAIL_RADAR_DIR__/logs/launchd.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

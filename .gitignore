@@ -1,0 +1,12 @@
+# 含 IMAP 授权码，绝不上传
+config.json
+# 含已下载的邮件正文与个人信息
+data/
+logs/
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+# 系统文件
+.DS_Store
+Thumbs.db
