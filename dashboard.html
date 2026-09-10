@@ -76,6 +76,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
   color:var(--dim);border:1px solid var(--line);
 }
 .tag.ai{border-color:rgba(74,158,255,.4);color:var(--accent)}
+.tag.imported{border-color:rgba(52,199,89,.45);color:#34c759}
 .meta{font-size:13px;color:var(--dim);margin-top:4px}
 .cd{font-size:15px;font-weight:650;margin-top:6px;font-variant-numeric:tabular-nums}
 .cd.critical{color:var(--critical)} .cd.soon{color:var(--soon)}
@@ -89,6 +90,43 @@ button:disabled{opacity:.5;cursor:not-allowed}
 }
 .acts a:hover,.acts button:hover{border-color:var(--accent)}
 .empty{color:var(--dim);text-align:center;padding:40px 0;font-size:14px}
+
+.modal{
+  position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99;
+  display:none;align-items:center;justify-content:center;padding:24px;
+}
+.modal.show{display:flex}
+.modal-box{
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  width:min(760px,100%);max-height:86vh;display:flex;flex-direction:column;
+  box-shadow:0 24px 60px rgba(0,0,0,.45);
+}
+.modal-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 18px;border-bottom:1px solid var(--line);font-weight:650;
+}
+.modal-body{padding:16px 18px;overflow:auto;font-size:13.5px}
+.mmeta{margin-bottom:10px;line-height:1.6}
+.mmeta .dim{color:var(--dim);font-size:12.5px}
+.mnote{
+  color:var(--dim);font-size:12.5px;margin:12px 0 6px;line-height:1.6;
+}
+.mlinks{display:flex;flex-direction:column;gap:6px}
+.mlink{
+  display:flex;gap:10px;align-items:baseline;justify-content:space-between;
+  background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  padding:8px 10px;word-break:break-all;
+}
+.mlink.best{border-color:rgba(52,199,89,.5)}
+.mlink a{color:var(--accent);text-decoration:none;font-size:12.5px}
+.mlink a:hover{text-decoration:underline}
+.lscore{flex-shrink:0;font-size:11px;color:var(--dim)}
+.mtext{
+  white-space:pre-wrap;word-break:break-word;background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:12px;
+  max-height:340px;overflow:auto;font-size:12.5px;line-height:1.7;margin:0;
+}
+.loading{color:var(--dim);padding:20px 0;text-align:center}
 
 .cfg{
   background:var(--panel);border:1px solid var(--line);border-radius:12px;
@@ -174,6 +212,17 @@ kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padd
   <div class="foot">
     <span id="footInfo"></span><br>
     停止服务：在启动它的终端窗口按 <kbd>Ctrl</kbd>+<kbd>C</kbd>
+  </div>
+</div>
+
+<!-- 完整邮件弹层 -->
+<div class="modal" id="mailModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span>原始邮件</span>
+      <button onclick="closeMail()">关闭</button>
+    </div>
+    <div class="modal-body" id="mailBody"></div>
   </div>
 </div>
 
@@ -265,13 +314,14 @@ function render(){
           <span class="tag ${e.source==='ai'?'ai':''}">${e.source==='ai'?'AI 精判':'规则解析'}</span>
           ${e.company?`<span class="tag">${esc(e.company)}</span>`:''}
           ${e.urgency==='dubious'?'<span class="tag">⚠ 时间存疑</span>':''}
+          ${e.imported?'<span class="tag imported">已导入</span>':''}
         </div>
         <div class="meta">${e.deadline_iso ? '截止 ' + fmt(e.deadline_iso) : '未识别到截止时间'}</div>
         ${e.deadline_iso ? `<div class="cd ${c.cls}" data-iso="${e.deadline_iso}">${c.text}</div>` : ''}
         ${e.notes ? `<div class="notes">${esc(e.notes)}</div>` : ''}
       </div>
       <div class="acts">
-        ${e.link ? `<a href="${esc(e.link)}" target="_blank" rel="noopener">打开链接</a>` : ''}
+        <button data-act="mail" data-id="${e.id}">查看完整邮件</button>
         <button data-act="${e.completed?'undo':'done'}" data-id="${e.id}">${e.completed?'撤销完成':'标记完成'}</button>
       </div>
     </div>`;
@@ -295,7 +345,9 @@ function render(){
     };
   });
   list.querySelectorAll('button[data-act]').forEach(el => {
-    el.onclick = () => toggleDone(el.dataset.id, el.dataset.act === 'undo');
+    const act = el.dataset.act;
+    if (act === 'mail') el.onclick = () => openMail(el.dataset.id);
+    else el.onclick = () => toggleDone(el.dataset.id, act === 'undo');
   });
   syncImportBtn();
 }
@@ -408,11 +460,61 @@ async function saveConfig(){
 }
 
 async function toggleDone(id, undo){
-  const r = await api('/api/done', {id, undo});
-  if(r.events) EVENTS = r.events;
+  // 先本地立即更新，避免等 AppleScript 同步导致界面卡住
+  const e = EVENTS.find(x => x.id === id);
+  if(e) e.completed = !undo;
   render();
-  if(r.sync) setMsg(r.sync, 'ok');
+  setMsg(undo ? '已撤销完成' : '已标记完成（系统提醒事项后台同步中）', 'ok');
+  try{
+    const r = await api('/api/done', {id, undo});
+    if(r.events) EVENTS = r.events;
+    render();
+  }catch(err){
+    if(e) e.completed = undo;   // 失败则回滚
+    render();
+    setMsg('同步失败：' + err.message, 'err');
+  }
 }
+
+/** 查看某条事件对应的完整邮件正文与全部链接 */
+async function openMail(id){
+  const e = EVENTS.find(x => x.id === id);
+  if(!e) return;
+  const modal = $('mailModal');
+  modal.classList.add('show');
+  $('mailBody').innerHTML = '<div class="loading">正在读取原始邮件…</div>';
+  try{
+    const d = await api('/api/email', {
+      source_id: e.source_id || '',
+      subject: e.source_subject || e.title || ''
+    });
+    if(!d.ok){
+      $('mailBody').innerHTML = `<div class="loading">${esc(d.message || '未找到原始邮件')}</div>`;
+      return;
+    }
+    const links = (d.links || []).map((l, i) => `
+      <div class="mlink ${i === 0 ? 'best' : ''}">
+        <a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.url)}</a>
+        <span class="lscore">${i === 0 ? '推荐' : '可信度 ' + l.score}</span>
+      </div>`).join('') || '<div class="loading">正文里没有找到链接</div>';
+    $('mailBody').innerHTML = `
+      <div class="mmeta">
+        <div><b>${esc(d.subject || '(无主题)')}</b></div>
+        <div class="dim">发件人：${esc(d.sender || '未知')}　收件时间：${esc(d.received_at || '未知')}</div>
+      </div>
+      <div class="mnote">下面是邮件原文里的全部链接，按可信度排序。
+        自动挑选的链接仅供参考，<b>请以这里列出的为准</b>。</div>
+      <div class="mlinks">${links}</div>
+      <div class="mnote">原文：</div>
+      <pre class="mtext">${esc(d.body || '(空)')}</pre>
+      ${d.truncated ? '<div class="dim">（正文过长，已截断显示）</div>' : ''}
+    `;
+  }catch(err){
+    $('mailBody').innerHTML = `<div class="loading">读取失败：${esc(err.message)}</div>`;
+  }
+}
+
+function closeMail(){ $('mailModal').classList.remove('show'); }
 
 function renderUpdate(st){
   window.LAST_TS = st.last_update || null;

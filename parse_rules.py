@@ -207,13 +207,65 @@ def extract_deadline(mail):
     return best[0], best[1], best[2]
 
 
+def _score_link(u):
+    """给候选链接打分，越高越可能是真正的测评/面试入口。"""
+    low = u.lower()
+    s = 0
+    # 强正向：明确指向测评/面试/笔试系统
+    for kw, w in (("测评", 10), ("笔试", 10), ("面试", 10),
+                  ("assessment", 10), ("interview", 10), ("exam", 8),
+                  ("test", 6), ("invite", 6), ("ot", 3),
+                  ("nowcoder", 6), ("moka", 6), ("mokahr", 6),
+                  ("hire", 5), ("campus", 5), ("job", 3),
+                  ("beisen", 6), ("italent", 6), ("zhaopin", 4),
+                  ("bsurl", 5), ("t.cn", 2), ("dwz", 2)):
+        if kw in low:
+            s += w
+    # 强负向：退订、图片、样式、隐私政策、备案、社交媒体
+    for kw, w in (("unsubscribe", -30), ("退订", -30), (".png", -20),
+                  (".jpg", -20), (".jpeg", -20), (".gif", -20), (".css", -20),
+                  ("logo", -15), ("privacy", -12), ("privac", -12),
+                  ("terms", -10), ("beian", -15), ("miit", -15),
+                  ("weibo", -10), ("weixin", -8), ("linkedin", -8),
+                  ("apple.com", -8), ("microsoft", -8), ("w3.org", -20),
+                  ("schema", -20), ("facebook", -10), ("twitter", -10),
+                  ("mail.", -5), ("%3c", -5)):
+        if kw in low:
+            s += w
+    # 查询参数丰富的短链/表单链接更可能是入口
+    if "?" in u and "=" in u:
+        s += 2
+    # 超长且无任何正向词的，多半是追踪像素
+    if s <= 0 and len(u) > 120:
+        s -= 5
+    return s
+
+
+def extract_links_all(mail, top=6):
+    """返回按可信度排序的候选链接 [(url, score), ...]，供人工核对。"""
+    seen, out = set(), []
+    for raw in LINK_RE.findall(mail.get("body", "")):
+        u = raw.rstrip(".,;)]}>\"'")
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append((u, _score_link(u)))
+    out.sort(key=lambda x: -x[1])
+    return out[:top]
+
+
 def extract_link(mail):
-    prefer = re.compile(r"(测评|面试|笔试|assessment|interview|test|invite|link)", re.I)
-    links = [l.rstrip(".,;)]}>\"'") for l in LINK_RE.findall(mail.get("body", ""))]
-    for l in links:
-        if prefer.search(l):
-            return l
-    return links[0] if links else ""
+    """
+    取最可信的一条链接。
+    注意：自动识别的链接**不保证正确**，页面会同时给出「查看完整邮件」
+    供人工核对原始正文里的全部链接。
+    """
+    cands = extract_links_all(mail)
+    if not cands:
+        return ""
+    best_url, best_score = cands[0]
+    # 最高分仍是负分或 0 分 —— 说明正文里没有像样的入口链接，不要瞎猜
+    return best_url if best_score > 0 else (cands[0][0] if cands else "")
 
 
 def main():
@@ -233,6 +285,9 @@ def main():
         etype = extract_type(f'{mail.get("subject","")}\n{mail.get("body","")}')
         dt, conf, raw = extract_deadline(mail)
         link = extract_link(mail)
+        ranked = extract_links_all(mail)
+        # 自动挑的链接不保证正确，把候选一并存下来供页面人工核对
+        links_all = [{"url": u, "score": sc} for u, sc in ranked if sc > 0][:6]
 
         if dt is None:
             events.append({
@@ -244,6 +299,9 @@ def main():
                 "confidence": 0,
                 "needs_review": True,
                 "link": link,
+                "link_score": next((c["score"] for c in links_all
+                                    if c["url"] == link), 0),
+                "links_all": links_all,
                 "notes": f'未能识别截止时间 | 主题: {mail.get("subject","")}',
                 "source_subject": mail.get("subject", ""),
                 "source_id": mail.get("message_id", ""),
@@ -259,6 +317,9 @@ def main():
             "confidence": conf,
             "needs_review": conf < args.min_confidence,
             "link": link,
+            "link_score": next((c["score"] for c in links_all
+                                if c["url"] == link), 0),
+            "links_all": links_all,
             "notes": f'识别依据: {raw} | 主题: {mail.get("subject","")}',
             "source_subject": mail.get("subject", ""),
             "source_id": mail.get("message_id", ""),

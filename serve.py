@@ -157,12 +157,14 @@ def collect_events():
 
     now = datetime.now()
     done = load_completed()
+    applied = backend.load_applied()     # 已写入过系统的条目，用于显示「已导入」
     result = []
     for e in merged:
         e = CD.annotate(e, now)
         # id 用内容指纹而非下标：扫描新增条目时不会让已有 id 整体移位
         e["id"] = backend.fingerprint(e)
-        e["completed"] = backend.fingerprint(e) in done
+        e["completed"] = e["id"] in done
+        e["imported"] = e["id"] in applied
         dl = CD.parse_dt(e.get("deadline") or e.get("start") or "")
         e["deadline_iso"] = dl.isoformat() if dl else ""
         result.append(e)
@@ -210,6 +212,61 @@ def do_scan(days=7):
         total = n
 
     return True, f"扫描完成，本次解析 {n} 项，看板累计 {total} 项"
+
+
+def load_cfg():
+    try:
+        with open(os.path.join(BASE_DIR, "config.json"), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def import_events(selected):
+    """把选中的事件写入系统提醒。按指纹去重，同一条不会重复写。"""
+    now = datetime.now()
+    payload = []
+    for e in selected:
+        c = dict(e)
+        cd = CD.format_countdown(e.get("deadline") or e.get("start"), now)
+        prefix = f"⏳ {cd}（截止 {e.get('deadline') or e.get('start')}）"
+        c["notes"] = f"{prefix}\n{e.get('notes') or ''}".strip()
+        payload.append(c)
+    with open(IMPORT_FILE, "w", encoding="utf-8") as f:
+        json.dump({"events": payload}, f, ensure_ascii=False, indent=2)
+
+    # 注意：这里**不能**加 --force。--force 会忽略 data/applied.json 的去重记录，
+    # 导致每次点导入都往提醒事项里再写一份，产生重复条目。
+    code, out, err = run_script(["apply_events.py", IMPORT_FILE])
+    return code == 0, (out or err).strip()[-400:] or ("导入成功" if code == 0 else "导入失败")
+
+
+def startup_scan():
+    """启动时后台扫一次邮箱；若开启 auto_import_new，顺带导入尚未写入的新条目。
+
+    这样即使不挂 launchd，每次打开看板看到的也是最新数据。
+    """
+    try:
+        cfg = load_cfg()
+        if not (cfg.get("email") and cfg.get("auth_code")):
+            print("[启动扫描] 未配置邮箱，跳过")
+            return
+        days = int(cfg.get("scan_days", 7) or 7)
+        print(f"[启动扫描] 扫描最近 {days} 天…")
+        ok, msg = do_scan(days)
+        print(f"[启动扫描] {msg}")
+
+        if ok and cfg.get("auto_import_new", True):
+            fresh = [e for e in collect_events()
+                     if not e.get("imported") and not e.get("completed")
+                     and e.get("urgency") in ("critical", "soon", "normal")]
+            if fresh:
+                ok2, msg2 = import_events(fresh)
+                print(f"[自动导入] {len(fresh)} 条新条目 → {msg2}")
+            else:
+                print("[自动导入] 没有尚未导入的新条目")
+    except Exception as e:
+        print(f"[启动扫描] 出错: {e}")
 
 
 # ------------------------------------------------------------------ HTTP
@@ -315,21 +372,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": False, "message": "所选条目均已导入或已完成"})
                 return
 
-            # 写入前把倒计时写进备注（Mac 的提醒事项里也能看到）
-            now = datetime.now()
-            payload = []
-            for e in selected:
-                c = dict(e)
-                cd = CD.format_countdown(e.get("deadline") or e.get("start"), now)
-                prefix = f"⏳ {cd}（截止 {e.get('deadline') or e.get('start')}）"
-                c["notes"] = f"{prefix}\n{e.get('notes') or ''}".strip()
-                payload.append(c)
-            with open(IMPORT_FILE, "w", encoding="utf-8") as f:
-                json.dump({"events": payload}, f, ensure_ascii=False, indent=2)
-
-            code, out, err = run_script(["apply_events.py", IMPORT_FILE, "--force"])
-            ok = code == 0
-            msg = (out or err).strip()[-400:] or ("导入成功" if ok else "导入失败")
+            ok, msg = import_events(selected)
             self._send(200, {"ok": ok, "message": msg, "events": collect_events()})
             return
 
@@ -348,17 +391,47 @@ class Handler(BaseHTTPRequestHandler):
                 done.add(fp)
             save_completed(done)
 
-            # 同步到系统（Mac 的提醒事项会打勾；ics 后端无副作用）
-            sync = ""
+            # 同步到系统（Mac 的提醒事项会打勾）。
+            # AppleScript 首次唤起「提醒事项」可能要好几秒，且后台进程可能没权限
+            # （会一直等到超时）。放到后台线程做，页面立即返回，不再卡住。
             if not undo:
-                try:
-                    ok, m = backend.mark_complete(
-                        ev.get("company") or ev.get("title", ""),
-                        _cfg_list_name())
-                    sync = m
-                except Exception as e:
-                    sync = str(e)[:120]
-            self._send(200, {"ok": True, "sync": sync, "events": collect_events()})
+                ev_snapshot = dict(ev)
+
+                def _sync():
+                    try:
+                        backend.mark_complete(
+                            ev_snapshot.get("company") or ev_snapshot.get("title", ""),
+                            _cfg_list_name())
+                    except Exception:
+                        pass
+
+                threading.Thread(target=_sync, daemon=True).start()
+
+            self._send(200, {"ok": True, "sync": "后台同步中",
+                             "events": collect_events()})
+            return
+
+        if path == "/api/email":
+            # 返回某条事件对应邮件的完整正文与全部链接，供人工核对
+            source_id = (body.get("source_id") or "").strip()
+            subject = (body.get("subject") or "").strip()
+            mail = _find_source_mail(source_id, subject)
+            if not mail:
+                self._send(200, {"ok": False,
+                                 "message": "未找到原始邮件（可能扫描范围不含该邮件，"
+                                            "试试扩大天数重新检索）"})
+                return
+            body_text = mail.get("body") or ""
+            self._send(200, {
+                "ok": True,
+                "subject": mail.get("subject", ""),
+                "sender": mail.get("sender", ""),
+                "received_at": mail.get("received_at", ""),
+                "body": body_text[:8000],
+                "truncated": len(body_text) > 8000,
+                "links": [{"url": u, "score": s}
+                          for u, s in _rank_links(body_text)],
+            })
             return
 
         if path == "/api/config-save":
@@ -424,6 +497,63 @@ def _configured():
         return False
 
 
+SCAN_FILES = ("latest_scan.json", "all_scan.json")
+
+
+def _iter_scan_mails():
+    """遍历已保存的扫描结果里的原始邮件（懒加载，只读一次后缓存）。"""
+    cache = getattr(_iter_scan_mails, "_cache", None)
+    if cache is not None:
+        return cache
+    mails = []
+    for name in SCAN_FILES:
+        p = os.path.join(DATA_DIR, name)
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                mails.extend(json.load(f).get("emails", []))
+        except Exception:
+            continue
+    _iter_scan_mails._cache = mails
+    return mails
+
+
+def _find_source_mail(source_id="", subject=""):
+    """按 Message-ID 精确匹配，失败再按主题匹配（AI 精判条目的 id 是合成的）。"""
+    mails = _iter_scan_mails()
+    if source_id:
+        for m in mails:
+            if (m.get("message_id") or "").strip() == source_id:
+                return m
+    if subject:
+        subj = subject.strip()
+        for m in mails:
+            if (m.get("subject") or "").strip() == subj:
+                return m
+        # 退一步：包含匹配，避免主题前后被加了前缀
+        for m in mails:
+            s = (m.get("subject") or "").strip()
+            if s and (s in subj or subj in s):
+                return m
+    return None
+
+
+def _rank_links(body_text):
+    try:
+        import parse_rules as PR
+        return PR.extract_links_all({"body": body_text}, top=10)
+    except Exception:
+        import re
+        urls = re.findall(r"https?://[^\s<>)\]\"'，。（）]+", body_text)
+        seen, out = set(), []
+        for u in urls:
+            if u not in seen:
+                seen.add(u)
+                out.append((u, 0))
+        return out[:10]
+
+
 def _cfg_list_name():
     try:
         with open(os.path.join(BASE_DIR, "config.json"), "r", encoding="utf-8") as f:
@@ -486,6 +616,9 @@ def main():
 
     if not args.no_open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+
+    # 打开即更新：后台扫一次邮箱，避免每次都要手动点检索
+    threading.Thread(target=startup_scan, daemon=True).start()
 
     try:
         httpd.serve_forever()

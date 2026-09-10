@@ -11,6 +11,11 @@
   "reminder_list": "求职待办",
   "calendar_name": "求职日程",
   "alarm_minutes_before": 60,
+
+  "_以下两项为网页看板的自动行为": "",
+  "scan_days": 7,
+  "auto_import_new": true,
+
   "_常用IMAP服务器": {
     "163邮箱": "imap.163.com:993",
     "126邮箱": "imap.126.com:993",
