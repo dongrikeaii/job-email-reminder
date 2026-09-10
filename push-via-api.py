@@ -137,14 +137,15 @@ def main():
         if not os.path.isfile(p):
             continue
         with open(p, "rb") as f:
-            content = f.read()
+            raw = f.read()
+        # 注意：建树 API 的 tree[].encoding 传 "base64" 时，GitHub 实际并不解码，
+        # 会把 base64 字符串原样存成文件内容。故这里直接传 UTF-8 原文。
         mode = "100755" if os.access(p, os.X_OK) else "100644"
         tree.append({
             "path": rel.replace(os.sep, "/"),
             "mode": mode,
             "type": "blob",
-            "content": base64.b64encode(content).decode("ascii"),
-            "encoding": "base64",
+            "content": raw.decode("utf-8"),
         })
     print(f"  待上传 {len(tree)} 个文件")
 
