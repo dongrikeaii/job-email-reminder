@@ -22,6 +22,7 @@ import mimetypes
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -30,7 +31,8 @@ UPLOADS = "https://uploads.github.com"
 UA = "job-mail-radar-publisher/1.0"
 
 
-def req(method, url, token, data=None, raw=False, timeout=120):
+def req(method, url, token, data=None, raw=False, timeout=120, retries=3):
+    """发请求。代理环境偶发 "Remote end closed connection"，故对网络级失败重试。"""
     body = None
     headers = {
         "Authorization": f"Bearer {token}",
@@ -41,19 +43,27 @@ def req(method, url, token, data=None, raw=False, timeout=120):
         body = data if raw else json.dumps(data, ensure_ascii=False).encode("utf-8")
         if not raw:
             headers["Content-Type"] = "application/json"
-    r = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
-            payload = resp.read()
-            return resp.status, (json.loads(payload) if payload else {})
-    except urllib.error.HTTPError as e:
-        payload = e.read()
+    last = (0, {"message": "未发起请求"})
+    for attempt in range(retries):
+        r = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            return e.code, json.loads(payload) if payload else {}
-        except Exception:
-            return e.code, {"message": payload[:400].decode("utf-8", "replace")}
-    except Exception as e:
-        return 0, {"message": str(e)}
+            with urllib.request.urlopen(r, timeout=timeout) as resp:
+                payload = resp.read()
+                return resp.status, (json.loads(payload) if payload else {})
+        except urllib.error.HTTPError as e:
+            payload = e.read()
+            try:
+                last = (e.code, json.loads(payload) if payload else {})
+            except Exception:
+                last = (e.code, {"message": payload[:400].decode("utf-8", "replace")})
+            if e.code < 500:
+                return last
+        except Exception as e:
+            last = (0, {"message": str(e)})
+        if attempt < retries - 1:
+            time.sleep(2 * (attempt + 1))
+            print(f"    重试 {attempt + 1}/{retries - 1} …")
+    return last
 
 
 def git_tracked_files(root):
