@@ -61,6 +61,18 @@ def git_tracked_files(root):
     return [l for l in out.stdout.split("\n") if l.strip()]
 
 
+def _token_from_gh():
+    """本机 gh 已登录时，直接借它的凭据（推荐，不必手动贴 token）。"""
+    try:
+        p = subprocess.run(["gh", "auth", "token"],
+                           capture_output=True, text=True, timeout=20)
+        if p.returncode == 0:
+            return p.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("repo")
@@ -73,7 +85,14 @@ def main():
 
     token = args.token.strip()
     if not token:
-        print("[错误] 缺少 GitHub Token。用 --token 或设置环境变量 GITHUB_TOKEN", file=sys.stderr)
+        token = _token_from_gh()
+        if token:
+            print("  凭据来源: gh auth token（本机已登录）")
+    if not token:
+        print("[错误] 缺少 GitHub 凭据。三选一：\n"
+              "  1) gh auth login（推荐，之后本脚本自动取用）\n"
+              "  2) --token <PAT>\n"
+              "  3) 环境变量 GITHUB_TOKEN", file=sys.stderr)
         sys.exit(2)
 
     root = os.path.dirname(os.path.abspath(__file__))
