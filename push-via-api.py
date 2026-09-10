@@ -110,6 +110,21 @@ def main():
     full = repo["full_name"]
     default_branch = repo.get("default_branch") or "main"
 
+    # --- 2.5 空仓库初始化 ---
+    # 刚创建且 auto_init=false 的仓库没有任何 ref，直接 POST /git/trees 会报
+    # 409 "Git Repository is empty."，故先用 Contents API 落一个初始提交。
+    code, _ = req("GET", f"{API}/repos/{full}/git/ref/heads/{default_branch}", token)
+    if code != 200:
+        print("  空仓库，正在初始化…")
+        code, init = req("PUT", f"{API}/repos/{full}/contents/README.md", token, {
+            "message": "chore: 初始化仓库",
+            "content": base64.b64encode(b"# job-email-reminder\n\ninitializing\n").decode("ascii"),
+            "branch": default_branch,
+        })
+        if code not in (201, 200):
+            print(f"[错误] 初始化失败（HTTP {code}）: {init.get('message')}", file=sys.stderr)
+            sys.exit(4)
+
     # --- 3. 建树 ---
     files = git_tracked_files(root)
     if not files:
