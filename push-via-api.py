@@ -73,6 +73,83 @@ def _token_from_gh():
     return ""
 
 
+def _git(root, *args, binary=False):
+    p = subprocess.run(["git", *args], cwd=root, capture_output=True, text=not binary)
+    if p.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} 失败: {p.stderr.strip()}")
+    return p.stdout
+
+
+def push_history(root, full, token, default_branch):
+    """按本地提交逐个推送，保留完整历史（默认模式）。
+
+    与快照模式的区别：快照把整个工作区压成 1 个提交，本地历史会丢失；
+    这里按 git rev-list 顺序重放每个提交，作者/提交者/时间/信息一并保留。
+    """
+    shas = [s for s in _git(root, "rev-list", "--reverse", "HEAD").split("\n") if s.strip()]
+    print(f"  待重放 {len(shas)} 个本地提交")
+
+    blob_map = {}   # git blob sha -> github blob sha（跨提交去重，同一内容只传一次）
+    parent = None
+    last = ""
+
+    for i, sha in enumerate(shas, 1):
+        meta = _git(root, "show", "-s",
+                    "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%B", sha)
+        an, ae, ad, cn, ce, cd, msg = (meta.rstrip("\n") + "\x00" * 7).split("\x00")[:7]
+
+        entries = _git(root, "ls-tree", "-r", "-z", sha)
+        tree = []
+        for rec in entries.split("\x00"):
+            if not rec:
+                continue
+            info, path = rec.split("\t", 1)
+            mode, otype, bsha = info.split()
+            if otype != "blob":
+                continue  # 子树由 API 扁平化展开，符号链接/子模块不推送
+            if bsha not in blob_map:
+                raw = _git(root, "cat-file", "blob", bsha, binary=True)
+                try:
+                    payload = {"content": raw.decode("utf-8"), "encoding": "utf-8"}
+                except UnicodeDecodeError:
+                    payload = {"content": base64.b64encode(raw).decode("ascii"),
+                               "encoding": "base64"}
+                code, b = req("POST", f"{API}/repos/{full}/git/blobs", token, payload)
+                if code != 201:
+                    print(f"[错误] 创建 blob 失败（HTTP {code}）: {b.get('message')}", file=sys.stderr)
+                    sys.exit(6)
+                blob_map[bsha] = b["sha"]
+            tree.append({"path": path, "mode": mode, "type": "blob", "sha": blob_map[bsha]})
+
+        code, t = req("POST", f"{API}/repos/{full}/git/trees", token, {"tree": tree})
+        if code != 201:
+            print(f"[错误] 建树失败（HTTP {code}）: {t.get('message')}", file=sys.stderr)
+            sys.exit(6)
+
+        body = {
+            "message": msg.rstrip("\n"),
+            "tree": t["sha"],
+            "parents": [parent] if parent else [],
+            "author": {"name": an, "email": ae, "date": ad},
+            "committer": {"name": cn, "email": ce, "date": cd},
+        }
+        code, c = req("POST", f"{API}/repos/{full}/git/commits", token, body)
+        if code != 201:
+            print(f"[错误] 创建提交失败（HTTP {code}）: {c.get('message')}", file=sys.stderr)
+            sys.exit(7)
+        parent = c["sha"]
+        last = sha
+        print(f"    [{i}/{len(shas)}] {sha[:8]} -> {parent[:8]}  {msg.strip().splitlines()[0][:50]}")
+
+    code, ref = req("PATCH", f"{API}/repos/{full}/git/refs/heads/{default_branch}",
+                    token, {"sha": parent, "force": True})
+    if code != 200:
+        print(f"[错误] 更新分支失败（HTTP {code}）: {ref.get('message')}", file=sys.stderr)
+        sys.exit(8)
+    print(f"  {default_branch} 已指向 {parent[:8]}（本地 {last[:8]}）")
+    return parent
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("repo")
@@ -81,6 +158,10 @@ def main():
     ap.add_argument("--private", action="store_true")
     ap.add_argument("--asset", default="")
     ap.add_argument("--tag", default="v1.0")
+    ap.add_argument("--tag-note", default="更新")
+    ap.add_argument("--tag-body", default="")
+    ap.add_argument("--snapshot", action="store_true",
+                    help="把整个工作区压成单个提交（默认：重放本地提交，保留历史）")
     args = ap.parse_args()
 
     token = args.token.strip()
@@ -144,7 +225,13 @@ def main():
             print(f"[错误] 初始化失败（HTTP {code}）: {init.get('message')}", file=sys.stderr)
             sys.exit(4)
 
-    # --- 3. 建树 ---
+    # --- 3. 建树与提交 ---
+    if not args.snapshot:
+        push_history(root, full, token, default_branch)
+        print(f"\n[OK] 推送完成: https://github.com/{full}")
+        do_release(full, token, args)
+        return
+
     files = git_tracked_files(root)
     if not files:
         print("[错误] git ls-files 为空，请先 git add", file=sys.stderr)
@@ -204,47 +291,47 @@ def main():
     print(f"  {default_branch} 已指向最新提交")
 
     print(f"\n[OK] 推送完成: https://github.com/{full}")
+    do_release(full, token, args)
 
-    # --- 6. Release + 附件 ---
-    if args.asset and os.path.isfile(args.asset):
-        code, rel = req("POST", f"{API}/repos/{full}/releases", token, {
-            "tag_name": args.tag,
-            "name": f"v1.0 — 首个正式版",
-            "body": ("首个可用版本。\n\n"
-                     "**macOS**：`start.command` 启动网页看板 → 填邮箱授权码 → 一键检索并导入提醒事项/日历。\n"
-                     "**Windows**：解压 `job-mail-radar-win.zip` → 双击 `start-windows.bat`。\n\n"
-                     "隐私：邮件只读拉取，全程本机处理。"),
-            "draft": False,
-            "prerelease": False,
-        })
-        if code not in (201, 422):
-            print(f"  [警告] 创建 Release 失败（HTTP {code}）: {rel.get('message')}")
-            return
-        upload_url = rel.get("upload_url", "").replace("{?name,label}", "")
-        if not upload_url:
-            print("  [警告] 未拿到上传地址")
-            return
-        upload_url = upload_url.replace(API, UPLOADS) if upload_url.startswith(API) else upload_url
 
-        name = os.path.basename(args.asset)
-        ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
-        with open(args.asset, "rb") as f:
-            blob = f.read()
-        r = urllib.request.Request(
-            f"{upload_url}?name={urllib.parse.quote(name)}",
-            data=blob,
-            headers={"Authorization": f"Bearer {token}",
-                     "Content-Type": ctype,
-                     "User-Agent": UA},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(r, timeout=300) as resp:
-                print(f"  附件已上传: {name}（{len(blob)//1024} KB）")
-        except Exception as e:
-            print(f"  [警告] 附件上传失败: {e}")
-            return
-        print(f"  Release: https://github.com/{full}/releases/tag/{args.tag}")
+def do_release(full, token, args):
+    if not args.asset or not os.path.isfile(args.asset):
+        return
+    code, rel = req("POST", f"{API}/repos/{full}/releases", token, {
+        "tag_name": args.tag,
+        "name": f"{args.tag} — {args.tag_note}",
+        "body": args.tag_body or f"发布 {args.tag}。",
+        "draft": False,
+        "prerelease": False,
+    })
+    if code not in (201, 422):
+        print(f"  [警告] 创建 Release 失败（HTTP {code}）: {rel.get('message')}")
+        return
+    upload_url = rel.get("upload_url", "").replace("{?name,label}", "")
+    if not upload_url:
+        print("  [警告] 未拿到上传地址")
+        return
+    upload_url = upload_url.replace(API, UPLOADS) if upload_url.startswith(API) else upload_url
+
+    name = os.path.basename(args.asset)
+    ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    with open(args.asset, "rb") as f:
+        blob = f.read()
+    r = urllib.request.Request(
+        f"{upload_url}?name={urllib.parse.quote(name)}",
+        data=blob,
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": ctype,
+                 "User-Agent": UA},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(r, timeout=300) as resp:
+            print(f"  附件已上传: {name}（{len(blob)//1024} KB）")
+    except Exception as e:
+        print(f"  [警告] 附件上传失败: {e}")
+        return
+    print(f"  Release: https://github.com/{full}/releases/tag/{args.tag}")
 
 
 if __name__ == "__main__":
