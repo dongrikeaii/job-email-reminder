@@ -6,15 +6,18 @@
   "imap_port": 993,
   "mailbox": "INBOX",
   "days": 7,
+  "strict_days": true,
   "max_results": 60,
   "body_max_len": 3000,
   "reminder_list": "求职待办",
   "calendar_name": "求职日程",
   "alarm_minutes_before": 60,
 
-  "_以下两项为网页看板的自动行为": "",
+  "_以下三项为网页看板的自动行为": "",
   "scan_days": 7,
   "auto_import_new": true,
+  "_strict_days说明": "true=严格按 7×24 小时（默认）；false=按自然日，窗口会宽出最多 24 小时",
+  "_auto_import_new说明": "true=启动后自动把新条目写入提醒事项（默认开）；false=只刷新看板，需手动点导入"
 
   "_常用IMAP服务器": {
     "163邮箱": "imap.163.com:993",

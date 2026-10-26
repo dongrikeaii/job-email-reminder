@@ -15,6 +15,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -241,19 +242,75 @@ def import_events(selected):
     return code == 0, (out or err).strip()[-400:] or ("导入成功" if code == 0 else "导入失败")
 
 
+def brief_msg(msg, n=110):
+    """把多行报错压成一行，便于在页面顶部显示（只取首行，后面的提示另有 hint）。"""
+    lines = (msg or "").strip().splitlines()
+    s = " ".join((lines[0] if lines else "").split())
+    s = s.replace("[错误] ", "")
+    s = re.sub(r"b'([^']*)'", r"\1", s)  # imaplib 的报错是 bytes，形如 b'LOGIN ...'
+    return s[:n]
+
+
+def scan_hint(msg):
+    """把常见报错翻译成人能看懂的一句话。"""
+    if "登录失败" in msg or "password error" in msg or "AUTH" in msg.upper():
+        return "授权码已失效或被重置，请到网页邮箱重新生成"
+    if "超时" in msg or "Timeout" in msg or "timed out" in msg:
+        return "服务器响应超时，可减少扫描天数后重试"
+    if "无法选择文件夹" in msg:
+        return "邮箱文件夹名对不上，检查 config.json 的 mailbox"
+    if "Errno" in msg or "Connection" in msg or "getaddrinfo" in msg:
+        return "连不上邮箱服务器，检查网络或 IMAP 地址"
+    return ""
+
+
+def save_scan_status(info):
+    """记录本次自动扫描的结果，供看板显示。
+
+    扫描失败时（授权码过期、网络不通）看板仍会照常显示上一次的数据，
+    用户看着是旧的却以为是最新的，所以必须把失败原因摆到页面上。
+    """
+    info = dict(info)
+    raw = info.get("message") or ""
+    info["message"] = brief_msg(raw)
+    info["hint"] = info.get("hint") or scan_hint(raw)
+    try:
+        with open(os.path.join(DATA_DIR, "last_scan_status.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_scan_status():
+    try:
+        with open(os.path.join(DATA_DIR, "last_scan_status.json"), "r",
+                  encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 def startup_scan():
     """启动时后台扫一次邮箱；若开启 auto_import_new，顺带导入尚未写入的新条目。
 
     这样即使不挂 launchd，每次打开看板看到的也是最新数据。
     """
+    st = {"ok": False, "message": "", "days": 0, "auto_imported": 0,
+          "import_message": "", "at": ""}
     try:
         cfg = load_cfg()
         if not (cfg.get("email") and cfg.get("auth_code")):
+            st["message"] = "未配置邮箱与授权码"
             print("[启动扫描] 未配置邮箱，跳过")
+            save_scan_status(st)
             return
         days = int(cfg.get("scan_days", 7) or 7)
+        st["days"] = days
         print(f"[启动扫描] 扫描最近 {days} 天…")
         ok, msg = do_scan(days)
+        st["ok"] = ok
+        st["message"] = msg
         print(f"[启动扫描] {msg}")
 
         if ok and cfg.get("auto_import_new", True):
@@ -262,11 +319,17 @@ def startup_scan():
                      and e.get("urgency") in ("critical", "soon", "normal")]
             if fresh:
                 ok2, msg2 = import_events(fresh)
+                st["auto_imported"] = len(fresh) if ok2 else 0
+                st["import_message"] = msg2
                 print(f"[自动导入] {len(fresh)} 条新条目 → {msg2}")
             else:
                 print("[自动导入] 没有尚未导入的新条目")
     except Exception as e:
+        st["message"] = f"启动扫描出错: {e}"
         print(f"[启动扫描] 出错: {e}")
+    finally:
+        st["at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        save_scan_status(st)
 
 
 # ------------------------------------------------------------------ HTTP
@@ -325,7 +388,8 @@ class Handler(BaseHTTPRequestHandler):
                              "system": sys.platform,
                              "configured": _configured(),
                              "last_update": ts, "last_update_src": src,
-                             "last_update_text": human})
+                             "last_update_text": human,
+                             "scan_status": load_scan_status()})
             return
 
         if path == "/api/config":
@@ -352,6 +416,9 @@ class Handler(BaseHTTPRequestHandler):
                 ok, msg = False, "扫描超时（>180 秒），请减少天数后重试"
             except Exception as e:
                 ok, msg = False, str(e)[:300]
+            save_scan_status({"ok": ok, "message": msg, "days": days,
+                              "auto_imported": 0, "import_message": "",
+                              "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
             events = collect_events() if ok else []
             urgent = next((e for e in events if e.get("urgency") in ("critical", "soon")), None)
             self._send(200, {

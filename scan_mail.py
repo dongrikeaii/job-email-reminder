@@ -6,11 +6,14 @@
 输出 JSON 供上层 LLM 精判（公司 / 事件类型 / 截止时间 / 链接）。
 
 用法:
-    python3 scan_mail.py                 # 扫描最近 N 天（默认 7）
+    python3 scan_mail.py                 # 扫描最近 N 天（默认 7，可在 config.json 改 days）
     python3 scan_mail.py --days 30       # 扫描最近 30 天
     python3 scan_mail.py --all           # 不做关键词粗筛，输出全部近期邮件
     python3 scan_mail.py --limit 5       # 最多输出 5 封
     python3 scan_mail.py --test-login    # 只测试 IMAP 登录是否通
+
+时间窗口：先由服务器用 SINCE 粗筛（省流量），再按邮件 Date 头精确筛到
+days×24 小时；关闭方式是在 config.json 里设 "strict_days": false。
 """
 
 import argparse
@@ -186,6 +189,33 @@ DATE_PATTERNS = [
 ]
 
 
+def within_days(date_hdr, days, now=None):
+    """精确判断邮件是否落在「距今 days×24 小时」内。
+
+    IMAP 的 SINCE 只按自然日过滤（服务器保留那天 00:00 起的全部邮件），
+    实际窗口会比预期宽出最多 24 小时。故在拿到邮件头后按时间戳再筛一次。
+    日期缺失或无法解析时一律放行，宁可多读也不误杀真正的测评邀请。
+    """
+    if not days or days <= 0:
+        return True
+    if not date_hdr:
+        return True
+    try:
+        dt = parsedate_to_datetime(date_hdr)
+    except Exception:
+        return True
+    if dt is None:
+        return True
+    try:
+        ts = dt.timestamp()  # 带时区的自动折算成 UTC 时间戳；naive 的按本地时区解释
+    except (OverflowError, OSError, ValueError):
+        return True
+    if ts <= 0:  # 1970 年之前的异常日期，多半是解析出错，放行
+        return True
+    now_ts = (now or datetime.now()).timestamp()
+    return (now_ts - ts) <= days * 86400
+
+
 def find_date_hints(text):
     hints = []
     for p in DATE_PATTERNS:
@@ -249,6 +279,7 @@ def main():
 
     cfg = load_config()
     days = args.days or cfg.get("days", 7)
+    strict = cfg.get("strict_days", True)  # 精确到 hours=days×24，而非按自然日
     limit = args.limit or cfg.get("max_results", 60)
     folder = args.folder or cfg.get("mailbox", "INBOX")
 
@@ -307,6 +338,7 @@ def main():
 
     results = []
     scanned = 0
+    skipped_old = 0
     for mid in reversed(ids):  # 新的在前
         if len(results) >= limit:
             break
@@ -317,6 +349,11 @@ def main():
         try:
             msg = email.message_from_bytes(msg_data[0][1])
         except Exception:
+            continue
+
+        # 精确窗口：SINCE 只到自然日，这里按 hours=days×24 再筛一次
+        if strict and not within_days(msg.get("Date"), days):
+            skipped_old += 1
             continue
 
         subject = decode_mime(msg.get("Subject", ""))
@@ -381,6 +418,8 @@ def main():
         "account": user,
         "folder": folder,
         "days": days,
+        "strict_days": strict,
+        "skipped_out_of_window": skipped_old,
         "scanned": scanned,
         "matched": len(results),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
